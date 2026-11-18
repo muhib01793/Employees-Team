@@ -2,6 +2,7 @@ import { useQuery } from 'react-query';
 import { useNavigate } from 'react-router-dom';
 import api, { endpoints } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { downloadDocumentFile } from '../utils/downloadFile';
 import {
   Users,
   Briefcase,
@@ -237,14 +238,14 @@ const Dashboard = () => {
                         </p>
                       </div>
                     </div>
-                    <a
-                      href={`/api/documents/${doc._id}/download`}
-                      download
-                      className="px-2.5 py-1 bg-white hover:bg-gray-100 border border-gray-200 rounded text-xs text-indigo-600 font-medium shrink-0 flex items-center gap-1"
+                    <button
+                      type="button"
+                      onClick={() => downloadDocumentFile(doc)}
+                      className="px-2.5 py-1 bg-white hover:bg-gray-100 border border-gray-200 rounded text-xs text-indigo-600 font-medium shrink-0 flex items-center gap-1 cursor-pointer transition-colors"
                     >
                       <Download className="w-3 h-3" />
                       Download
-                    </a>
+                    </button>
                   </div>
                 ))
               )}

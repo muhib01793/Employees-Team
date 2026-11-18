@@ -16,28 +16,19 @@ import {
   createMockMessage,
 } from './mockData';
 
-// If VITE_API_URL is configured (e.g. Render backend), use that.
-// Otherwise fallback to relative /api or direct path.
-const API_BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '' : '/api');
+const LIVE_BACKEND_URL = import.meta.env.VITE_API_URL;
+const hasLiveBackend = Boolean(LIVE_BACKEND_URL);
 
-const api = axios.create({
-  baseURL: API_BASE_URL,
+// Underlying real Axios instance for live backend requests
+const realHttp = axios.create({
+  baseURL: LIVE_BACKEND_URL || '',
   headers: {
     'Content-Type': 'application/json',
   },
   timeout: 10000,
 });
 
-// Attach JWT token to all requests automatically
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
-
-// Helper: Safely parse JSON request body
+// Helper: Safely parse request body from Object, JSON string, or FormData
 function parseRequestBody(data) {
   if (!data) return {};
   if (typeof data === 'string') {
@@ -47,66 +38,86 @@ function parseRequestBody(data) {
       return {};
     }
   }
-  if (data instanceof FormData) {
+
+  // Handle FormData in browser
+  if (typeof FormData !== 'undefined' && data instanceof FormData) {
     const obj = {};
-    data.forEach((val, key) => {
-      if (val instanceof File) {
-        obj[key] = val.name;
-        obj.fileName = val.name;
-        obj.fileSize = val.size;
-        obj.fileType = val.type;
-      } else {
-        obj[key] = val;
+    try {
+      if (typeof data.entries === 'function') {
+        for (const [key, val] of data.entries()) {
+          if (typeof File !== 'undefined' && val instanceof File) {
+            obj[key] = val.name;
+            obj.fileName = val.name;
+            obj.fileSize = val.size;
+            obj.fileType = val.type || 'application/pdf';
+          } else {
+            obj[key] = val;
+          }
+        }
       }
-    });
+    } catch (e) {
+      console.warn('FormData iteration error:', e);
+    }
+
+    const title = data.get('title');
+    const description = data.get('description');
+    const file = data.get('file') || data.get('document');
+
+    if (title) obj.title = String(title);
+    if (description) obj.description = String(description);
+
+    if (file && typeof file === 'object') {
+      obj.fileName = file.name || 'document.pdf';
+      obj.fileSize = file.size || 1024 * 512;
+      obj.fileType = file.type || 'application/pdf';
+      if (!obj.title) obj.title = file.name;
+    } else if (typeof file === 'string' && !obj.fileName) {
+      obj.fileName = file;
+    }
     return obj;
   }
+
   return data;
 }
 
-// Mock fallback router for Netlify / offline / disconnected backend preview
-async function handleMockFallback(config) {
+// Mock Engine Fallback Router
+export async function handleMockFallback(config) {
   if (!config) return null;
   const method = (config.method || 'get').toLowerCase();
-  let url = config.url || '';
+  let rawUrl = config.url || '';
 
-  // Clean url: remove baseURL and leading /api
-  url = url.replace(/^https?:\/\/[^/]+/, '');
-  url = url.replace(/^\/?api\/?/, '/');
-  if (!url.startsWith('/')) url = '/' + url;
-  const path = url.split('?')[0];
+  // Extract path without domain, /api prefix, or query params
+  if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
+    try {
+      const parsed = new URL(rawUrl);
+      rawUrl = parsed.pathname;
+    } catch (e) {}
+  }
+
+  rawUrl = rawUrl.replace(/^\/?api/, '');
+  if (!rawUrl.startsWith('/')) rawUrl = '/' + rawUrl;
+  const cleanPath = rawUrl.split('?')[0].replace(/\/+$/, '') || '/';
+
   const body = parseRequestBody(config.data);
   const currentUser = getCurrentMockUser();
 
-  console.log(`[Demo/Fallback Engine] Handling ${method.toUpperCase()} ${path}`);
+  console.log(`[Storage/Mock Router] ${method.toUpperCase()} ${cleanPath}`);
 
   try {
-    // 1. Auth Login
-    if (path === '/auth/login' && method === 'post') {
+    // 1. AUTH: Login
+    if (cleanPath === '/auth/login' && method === 'post') {
       const res = mockLogin(body.email, body.password);
-      return {
-        data: { success: true, ...res },
-        status: 200,
-        statusText: 'OK',
-        headers: {},
-        config,
-      };
+      return { data: { success: true, ...res }, status: 200, statusText: 'OK', headers: {}, config };
     }
 
-    // 2. Auth Register
-    if (path === '/auth/register' && method === 'post') {
+    // 2. AUTH: Register
+    if (cleanPath === '/auth/register' && method === 'post') {
       const res = mockRegister(body);
-      return {
-        data: { success: true, ...res },
-        status: 201,
-        statusText: 'Created',
-        headers: {},
-        config,
-      };
+      return { data: { success: true, ...res }, status: 201, statusText: 'Created', headers: {}, config };
     }
 
-    // 3. Auth Me
-    if (path === '/auth/me' && method === 'get') {
+    // 3. AUTH: Me
+    if (cleanPath === '/auth/me' && method === 'get') {
       const user = currentUser || {
         _id: 'usr_admin_1',
         name: 'Admin User',
@@ -114,176 +125,105 @@ async function handleMockFallback(config) {
         role: 'admin',
         designation: 'Platform Admin',
       };
-      return {
-        data: { success: true, user },
-        status: 200,
-        statusText: 'OK',
-        headers: {},
-        config,
-      };
+      return { data: { success: true, user }, status: 200, statusText: 'OK', headers: {}, config };
     }
 
-    // 4. Auth Logout
-    if (path === '/auth/logout' && method === 'post') {
-      return {
-        data: { success: true, message: 'Logged out successfully' },
-        status: 200,
-        statusText: 'OK',
-        headers: {},
-        config,
-      };
+    // 4. AUTH: Logout
+    if (cleanPath === '/auth/logout' && method === 'post') {
+      return { data: { success: true, message: 'Logged out successfully' }, status: 200, statusText: 'OK', headers: {}, config };
     }
 
-    // 5. Auth Status
-    if (path === '/auth/status' && method === 'put') {
+    // 5. AUTH: Status
+    if (cleanPath === '/auth/status' && method === 'put') {
       if (currentUser) {
         currentUser.status = body.status || 'online';
         localStorage.setItem('user', JSON.stringify(currentUser));
       }
-      return {
-        data: { success: true, user: currentUser },
-        status: 200,
-        statusText: 'OK',
-        headers: {},
-        config,
-      };
+      return { data: { success: true, user: currentUser }, status: 200, statusText: 'OK', headers: {}, config };
     }
 
-    // 6. Users List
-    if (path === '/users' && method === 'get') {
-      return {
-        data: { success: true, users: getMockUsers() },
-        status: 200,
-        statusText: 'OK',
-        headers: {},
-        config,
-      };
+    // 6. USERS: List
+    if (cleanPath === '/users' && method === 'get') {
+      return { data: { success: true, users: getMockUsers() }, status: 200, statusText: 'OK', headers: {}, config };
     }
 
-    // 7. Users Create (Add Employee)
-    if (path === '/users' && method === 'post') {
+    // 7. USERS: Create (Add Employee)
+    if (cleanPath === '/users' && method === 'post') {
       const newUser = createMockUser(body);
-      return {
-        data: { success: true, user: newUser },
-        status: 201,
-        statusText: 'Created',
-        headers: {},
-        config,
-      };
+      return { data: { success: true, user: newUser }, status: 201, statusText: 'Created', headers: {}, config };
     }
 
-    // 8. Users Delete
-    if (path.startsWith('/users/') && method === 'delete') {
-      const id = path.replace('/users/', '');
+    // 8. USERS: Delete
+    if (cleanPath.startsWith('/users/') && method === 'delete') {
+      const id = cleanPath.replace('/users/', '');
       deleteMockUser(id);
-      return {
-        data: { success: true, message: 'User deleted' },
-        status: 200,
-        statusText: 'OK',
-        headers: {},
-        config,
-      };
+      return { data: { success: true, message: 'User deleted' }, status: 200, statusText: 'OK', headers: {}, config };
     }
 
-    // 9. Work Updates List
-    if (path === '/work' && method === 'get') {
-      return {
-        data: { success: true, updates: getMockWorkUpdates() },
-        status: 200,
-        statusText: 'OK',
-        headers: {},
-        config,
-      };
+    // 9. USERS: Get Single
+    if (cleanPath.startsWith('/users/') && method === 'get') {
+      const id = cleanPath.replace('/users/', '');
+      const user = getMockUsers().find((u) => u._id === id) || currentUser;
+      return { data: { success: true, user }, status: 200, statusText: 'OK', headers: {}, config };
     }
 
-    // 10. Work Updates Create
-    if (path === '/work' && method === 'post') {
-      const newUpdate = createMockWorkUpdate(body, currentUser);
-      return {
-        data: { success: true, update: newUpdate },
-        status: 201,
-        statusText: 'Created',
-        headers: {},
-        config,
-      };
+    // 10. DOCUMENTS: List
+    if (cleanPath === '/documents' && method === 'get') {
+      return { data: { success: true, documents: getMockDocuments() }, status: 200, statusText: 'OK', headers: {}, config };
     }
 
-    // 11. Work Updates Delete
-    if (path.startsWith('/work/') && method === 'delete') {
-      const id = path.replace('/work/', '');
-      deleteMockWorkUpdate(id);
-      return {
-        data: { success: true, message: 'Work update removed' },
-        status: 200,
-        statusText: 'OK',
-        headers: {},
-        config,
-      };
-    }
-
-    // 12. Documents List
-    if (path === '/documents' && method === 'get') {
-      return {
-        data: { success: true, documents: getMockDocuments() },
-        status: 200,
-        statusText: 'OK',
-        headers: {},
-        config,
-      };
-    }
-
-    // 13. Documents Upload
-    if (path === '/documents' && method === 'post') {
+    // 11. DOCUMENTS: Upload
+    if (cleanPath === '/documents' && method === 'post') {
       const newDoc = createMockDocument(body, currentUser);
-      return {
-        data: { success: true, document: newDoc },
-        status: 201,
-        statusText: 'Created',
-        headers: {},
-        config,
-      };
+      return { data: { success: true, document: newDoc }, status: 201, statusText: 'Created', headers: {}, config };
     }
 
-    // 14. Documents Delete
-    if (path.startsWith('/documents/') && method === 'delete') {
-      const id = path.replace('/documents/', '');
+    // 12. DOCUMENTS: Delete
+    if (cleanPath.startsWith('/documents/') && method === 'delete') {
+      const id = cleanPath.replace('/documents/', '');
       deleteMockDocument(id);
-      return {
-        data: { success: true, message: 'Document deleted' },
-        status: 200,
-        statusText: 'OK',
-        headers: {},
-        config,
-      };
+      return { data: { success: true, message: 'Document deleted' }, status: 200, statusText: 'OK', headers: {}, config };
     }
 
-    // 15. Messages List
-    if (path === '/messages' && method === 'get') {
+    // 13. WORK: List
+    if (cleanPath === '/work' && method === 'get') {
+      return { data: { success: true, updates: getMockWorkUpdates() }, status: 200, statusText: 'OK', headers: {}, config };
+    }
+
+    // 14. WORK: Create
+    if (cleanPath === '/work' && method === 'post') {
+      const newUpdate = createMockWorkUpdate(body, currentUser);
+      return { data: { success: true, update: newUpdate }, status: 201, statusText: 'Created', headers: {}, config };
+    }
+
+    // 15. WORK: Delete
+    if (cleanPath.startsWith('/work/') && method === 'delete') {
+      const id = cleanPath.replace('/work/', '');
+      deleteMockWorkUpdate(id);
+      return { data: { success: true, message: 'Work update removed' }, status: 200, statusText: 'OK', headers: {}, config };
+    }
+
+    // 16. MESSAGES: List
+    if (cleanPath === '/messages' && method === 'get') {
       const receiverId = config.params?.receiverId;
       const msgs = getMockMessages(receiverId, currentUser?._id);
-      return {
-        data: { success: true, messages: msgs },
-        status: 200,
-        statusText: 'OK',
-        headers: {},
-        config,
-      };
+      return { data: { success: true, messages: msgs }, status: 200, statusText: 'OK', headers: {}, config };
     }
 
-    // 16. Messages Send
-    if (path === '/messages' && method === 'post') {
+    // 17. MESSAGES: Send
+    if (cleanPath === '/messages' && method === 'post') {
       const newMsg = createMockMessage(body.content, body.receiverId, currentUser);
-      return {
-        data: { success: true, message: newMsg },
-        status: 201,
-        statusText: 'Created',
-        headers: {},
-        config,
-      };
+      return { data: { success: true, message: newMsg }, status: 201, statusText: 'Created', headers: {}, config };
     }
 
-    // 17. Companies
-    if (path === '/companies' && method === 'get') {
+    // 18. MESSAGES: Conversations
+    if (cleanPath === '/messages/conversations' && method === 'get') {
+      const convs = getMockUsers().filter((u) => u._id !== currentUser?._id);
+      return { data: { success: true, conversations: convs }, status: 200, statusText: 'OK', headers: {}, config };
+    }
+
+    // 19. COMPANIES
+    if (cleanPath === '/companies' && method === 'get') {
       return {
         data: {
           success: true,
@@ -303,8 +243,8 @@ async function handleMockFallback(config) {
       };
     }
 
-    // 18. Teams
-    if (path === '/teams' && method === 'get') {
+    // 20. TEAMS
+    if (cleanPath === '/teams' && method === 'get') {
       return {
         data: {
           success: true,
@@ -320,7 +260,7 @@ async function handleMockFallback(config) {
       };
     }
 
-    return null;
+    return { data: { success: true }, status: 200, statusText: 'OK', headers: {}, config };
   } catch (err) {
     const errorObj = new Error(err.message || 'Action failed');
     errorObj.response = {
@@ -331,32 +271,54 @@ async function handleMockFallback(config) {
   }
 }
 
-// Response interceptor: Handles Netlify SPA html redirects and server connection failures
-api.interceptors.response.use(
-  async (response) => {
-    // If Netlify returned index.html for a missing API route (status 200 with HTML body)
-    if (typeof response.data === 'string' && response.data.trim().startsWith('<!DOCTYPE html')) {
-      const mockResult = await handleMockFallback(response.config);
-      if (mockResult) return mockResult;
-    }
-    return response;
-  },
-  async (error) => {
-    // Check if network error, 404, 405, 500, or server offline
-    const isNetworkErr = !error.response || error.code === 'ERR_NETWORK' || error.code === 'ECONNREFUSED';
-    const isNotFound = error.response && (error.response.status === 404 || error.response.status === 405);
-
-    if (isNetworkErr || isNotFound) {
-      try {
-        const mockResult = await handleMockFallback(error.config);
-        if (mockResult) return mockResult;
-      } catch (mockErr) {
-        return Promise.reject(mockErr);
-      }
-    }
-    return Promise.reject(error);
+// Request Executor: Dual Mode (Live Backend + Offline Mock Engine)
+async function executeRequest(config) {
+  const token = localStorage.getItem('token');
+  const headers = { ...config.headers };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
   }
-);
+  const mergedConfig = { ...config, headers };
+
+  // If live backend URL is configured, try sending network request
+  if (hasLiveBackend) {
+    try {
+      const res = await realHttp.request(mergedConfig);
+      // If server returned HTML (e.g. 404 page rewritten as HTML with 200 OK)
+      if (typeof res.data === 'string' && res.data.toLowerCase().includes('<html')) {
+        return handleMockFallback(mergedConfig);
+      }
+      return res;
+    } catch (err) {
+      // If server offline, network down, 404 or 405, fallback gracefully
+      const isNetworkErr = !err.response || err.code === 'ERR_NETWORK' || err.code === 'ECONNREFUSED';
+      const isNotFound = err.response && (err.response.status === 404 || err.response.status === 405);
+      if (isNetworkErr || isNotFound) {
+        return handleMockFallback(mergedConfig);
+      }
+      throw err;
+    }
+  }
+
+  // Pure Client / Netlify Demo Mode (no backend URL attached):
+  // Resolve immediately from client storage engine (no network latency or 405s)
+  return handleMockFallback(mergedConfig);
+}
+
+const api = {
+  get: (url, config = {}) => executeRequest({ ...config, method: 'get', url }),
+  post: (url, data, config = {}) => executeRequest({ ...config, method: 'post', url, data }),
+  put: (url, data, config = {}) => executeRequest({ ...config, method: 'put', url, data }),
+  delete: (url, config = {}) => executeRequest({ ...config, method: 'delete', url }),
+  request: (config) => executeRequest(config),
+  interceptors: {
+    request: { use: () => {} },
+    response: { use: () => {} },
+  },
+  defaults: {
+    headers: { common: {} },
+  },
+};
 
 export default api;
 

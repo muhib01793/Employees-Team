@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import api, { endpoints } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { downloadDocumentFile } from '../utils/downloadFile';
 import {
   FileText,
   Upload,
@@ -99,15 +100,7 @@ const Documents = () => {
   };
 
   const handleDownload = (doc) => {
-    // Direct link to backend file download endpoint or static url
-    const downloadUrl = `/api/documents/${doc._id}/download`;
-    const link = document.createElement('a');
-    link.href = downloadUrl;
-    link.download = doc.fileName || 'download';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    toast.success(`Downloading ${doc.fileName || doc.title}...`);
+    downloadDocumentFile(doc);
   };
 
   const formatFileSize = (bytes) => {
