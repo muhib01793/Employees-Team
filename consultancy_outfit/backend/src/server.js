@@ -29,15 +29,26 @@ const __dirname = path.dirname(__filename);
 connectDB();
 
 const app = express();
-const httpServer = createServer(app);
-
-// Socket.io setup
-const io = initSocket(httpServer, {
-  cors: {
-    origin: (origin, callback) => callback(null, true),
-    credentials: true,
-  },
-});
+// -------------------------------------------------------------------
+// The following block creates an HTTP server and Socket.io **only** when the
+// code is running locally or on a traditional VM. Vercel deploys the app as a
+// serverless function, which cannot keep long‑living socket connections. In that
+// environment we skip the server and socket creation and simply export the
+// Express app.
+// -------------------------------------------------------------------
+let httpServer;
+let io;
+if (!process.env.VERCEL) {
+  httpServer = createServer(app);
+  io = initSocket(httpServer, {
+    cors: {
+      origin: (origin, callback) => callback(null, true),
+      credentials: true,
+    },
+  });
+  // Make io accessible in routes
+  app.set('io', io);
+}
 
 // Body parsers
 app.use(express.json({ limit: '50mb' }));
@@ -55,8 +66,6 @@ app.use(
   })
 );
 
-// Make io accessible in routes
-app.set('io', io);
 
 // Health check
 app.get('/api/health', (req, res) => {
