@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: consultancy-outfit-backend
+    name: employees-team-backend
     runtime: node
     rootDir: consultancy_outfit/backend
     buildCommand: npm install
@@ -11,18 +11,12 @@ services:
       - key: PORT
         value: 10000
       - key: MONGO_URI
-        sync: false
+        value: mongodb+srv://muhibkhan9795_db_user:muhib1122@cluster0.dto6zea.mongodb.net/employees_team?retryWrites=true&w=majority
       - key: JWT_SECRET
-        sync: false
+        value: super_secret_jwt_key_consultancy_2026
       - key: JWT_EXPIRE
         value: 7d
       - key: CLIENT_URL
-        sync: false
-      - key: CLOUDINARY_CLOUD_NAME
-        sync: false
-      - key: CLOUDINARY_API_KEY
-        sync: false
-      - key: CLOUDINARY_API_SECRET
-        sync: false
+        value: https://employees-team.netlify.app
       - key: SOCKET_CORS_ORIGIN
-        sync: false
+        value: https://employees-team.netlify.app
