@@ -8,7 +8,7 @@ export const SocketProvider = ({ children }) => {
 
   useEffect(() => {
     const token = localStorage.getItem('token');
-    const socketUrl = `${window.location.protocol}//${window.location.hostname}:5001`;
+    const socketUrl = import.meta.env.VITE_BACKEND_URL || `${window.location.protocol}//${window.location.hostname}:5001`;
     const newSocket = io(socketUrl, {
       auth: { token },
       transports: ['websocket', 'polling'],
